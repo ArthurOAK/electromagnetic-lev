@@ -6,18 +6,21 @@ const int bigStepDirPin = 11;
 const int bigStepPulsePin = 10;
 
 // Motor Parameters
-const int stepsPerRev = 3200; // Steps per revolution for stepper motors
-const float smallMotorStepsPerBigMotorRev = 7.5; // Steps for small motor per big motor revolution
-const int turnsPerLayer = 172; // Big motor turns per layer
-const int totalLayers = 1;     // For testing, set to 1 layer
-volatile int currentBigSteps = 0;
-volatile int currentSmallSteps = 0;
-volatile int bigRevolutions = 0;
-volatile int layerCompleted = 0;
+const int bigMotorStepsPerRev = 3200;  // Steps per revolution for the big motor
+const int smallMotorStepsPerRev = 200; // Steps per revolution for the small motor
+const float smallStepsPerBigRev = 7.5; // Small motor steps per big motor revolution
+const int bigMotorTurnsPerLayer = 172; // Big motor turns per layer
+const int totalLayers = 1;             // Total layers for testing
+
+// Step Tracking
+volatile int currentBigSteps = 0;       // Steps completed by the big motor
+volatile float currentSmallSteps = 0;  // Steps completed by the small motor
+volatile int bigRevolutions = 0;       // Number of big motor revolutions
+volatile int layerCompleted = 0;       // Number of completed layers
 
 // Direction Flags
-bool smallMotorDirection = LOW; // Start with counterclockwise for wireMotor
-bool bigMotorDirection = HIGH;  // Clockwise for coreMotor
+bool smallMotorDirection = LOW; // Initial direction of the small motor
+bool bigMotorDirection = HIGH;  // Initial direction of the big motor
 
 // Timer Interrupt Variables
 volatile bool bigMotorStepState = false;
@@ -32,36 +35,48 @@ void setup() {
   pinMode(bigStepDirPin, OUTPUT);
   pinMode(bigStepPulsePin, OUTPUT);
 
-  // Enable Big Motor
+  // Enable Motors and Set Initial Directions
   digitalWrite(bigStepEnablePin, HIGH);
   digitalWrite(bigStepDirPin, bigMotorDirection);
   digitalWrite(smallStepDirPin, smallMotorDirection);
 
-  // Setup Timers
-  setupTimers();
-
-  // Initial Log
+  // Initialize Serial Communication
   Serial.begin(9600);
   Serial.println("Initialization complete. Motors will start shortly...");
+
+  // Test Rotations
+  testMotors();
+
+  // Setup Timers
+  setupTimers();
+}
+
+// Function to Test Motors with 1 Revolution Each
+void testMotors() {
+  // Rotate Big Motor for 1 Revolution
+  for (int i = 0; i < bigMotorStepsPerRev; i++) {
+    digitalWrite(bigStepPulsePin, HIGH);
+    delayMicroseconds(500);
+    digitalWrite(bigStepPulsePin, LOW);
+    delayMicroseconds(500);
+  }
+
+  // Rotate Small Motor for 1 Revolution
+  for (int i = 0; i < smallMotorStepsPerRev; i++) {
+    digitalWrite(smallStepPulsePin, HIGH);
+    delayMicroseconds(500);
+    digitalWrite(smallStepPulsePin, LOW);
+    delayMicroseconds(500);
+  }
 }
 
 // Main Loop
 void loop() {
-  // Logic for layers and stopping the motors
+  // Stop all motors after completing all layers
   if (layerCompleted >= totalLayers) {
     stopMotors();
     Serial.println("All layers completed. Program stopped.");
-    while (true); // Infinite loop to halt the program
-  }
-
-  // Update direction for the small motor at layer transitions
-  if (bigRevolutions == turnsPerLayer) {
-    bigRevolutions = 0;
-    smallMotorDirection = !smallMotorDirection; // Reverse direction
-    digitalWrite(smallStepDirPin, smallMotorDirection);
-    layerCompleted++;
-    Serial.print("Layer completed: ");
-    Serial.println(layerCompleted);
+    while (true); // Halt the program
   }
 }
 
@@ -72,7 +87,7 @@ void setupTimers() {
   TCCR1A = 0;                // Clear Timer/Counter Control Register A
   TCCR1B = 0;                // Clear Timer/Counter Control Register B
   TCNT1 = 0;                 // Initialize Timer1 counter to 0
-  OCR1A = 400;               // Set compare match register for 25 kHz (16 MHz / (2 * 400 * 8))
+  OCR1A = 400;               // Set compare match register for ~25 kHz
   TCCR1B |= (1 << WGM12);    // Configure Timer1 in CTC mode
   TCCR1B |= (1 << CS11);     // Prescaler 8
   TIMSK1 |= (1 << OCIE1A);   // Enable Timer1 compare interrupt
@@ -90,35 +105,37 @@ void setupTimers() {
 
 // Timer1 Interrupt for Big Motor
 ISR(TIMER1_COMPA_vect) {
-  // Toggle Pulse State
   bigMotorStepState = !bigMotorStepState;
   digitalWrite(bigStepPulsePin, bigMotorStepState);
 
-  // Count Steps
   if (bigMotorStepState) {
     currentBigSteps++;
-    if (currentBigSteps >= stepsPerRev) { // One revolution completed
+    if (currentBigSteps >= bigMotorStepsPerRev) {
       currentBigSteps = 0;
       bigRevolutions++;
+      if (bigRevolutions % bigMotorTurnsPerLayer == 0) {
+        // Layer Completed
+        layerCompleted++;
+        smallMotorDirection = !smallMotorDirection; // Reverse small motor direction
+        digitalWrite(smallStepDirPin, smallMotorDirection);
+      }
     }
   }
 }
 
 // Timer2 Interrupt for Small Motor
 ISR(TIMER2_COMPA_vect) {
-  if (currentBigSteps % int(stepsPerRev / smallMotorStepsPerBigMotorRev) == 0) {
-    // Toggle Pulse State
+  if (currentBigSteps % int(bigMotorStepsPerRev / smallStepsPerBigRev) == 0) {
     smallMotorStepState = !smallMotorStepState;
     digitalWrite(smallStepPulsePin, smallMotorStepState);
 
-    // Count Steps
     if (smallMotorStepState) {
-      currentSmallSteps++;
+      currentSmallSteps += (smallMotorDirection == LOW) ? -1 : 1;
     }
   }
 }
 
-// Stop All Motors
+// Function to Stop All Motors
 void stopMotors() {
   digitalWrite(bigStepEnablePin, LOW);
   digitalWrite(bigStepPulsePin, LOW);
